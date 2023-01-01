@@ -6,6 +6,9 @@ import pandas as pd
 import cv2
 import numpy as np
 import os
+from collections import OrderedDict
+
+
 
 class DeepFashionDataset(Dataset):
     def __init__(self,img_dir,train_path=None,test_path=None,validation_path=None,mode="train", transform=None, ):
@@ -37,8 +40,8 @@ class DeepFashionDataset(Dataset):
         self.landmarks = df["landmarks"].to_numpy().tolist()
         self.attributes = df["attributes"].to_numpy().tolist()
         self.classes = [i+"/"+j for i,j in zip(self.main_classes,self.sub_classes)  ]
-        self.classes_set = set(self.classes)
-        
+        self.classes_set = list(OrderedDict.fromkeys(self.classes))
+         
         del df
 
         #
