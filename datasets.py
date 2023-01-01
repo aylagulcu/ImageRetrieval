@@ -63,13 +63,14 @@ class DeepFashionDataset(Dataset):
         #     self.classes.append(class_name)
         #     for img_path in glob.glob(class_path + "/*.jpg"):
         #         self.data.append([img_path, class_name])
-                
- 
-        self.labels= [i for i,j in enumerate(self.classes)]
+                              
+        self.idx_to_class = {i:j for i, j in enumerate(self.classes)} # given id, get class name
+        
+        self.class_to_label= {cls:lab for lab,cls in enumerate(self.classes_set)} # given class name, get label (int)
+        self.labels= [self.class_to_label[i] for i in self.classes]
         self.labels= np.array(self.labels)
         self.labels_set = set(self.labels)
-                                
-        self.idx_to_class = {i:j for i, j in enumerate(self.classes)} # given id, get class name
+        
         self.class_to_indices = {cls: np.squeeze(np.where(np.array(self.classes) == cls)).tolist() 
                                  for cls in self.classes_set} # given class name, get list of item indices
         self.label_to_indices = {label: np.squeeze(np.where(self.labels == label))
@@ -81,7 +82,6 @@ class DeepFashionDataset(Dataset):
 
     def __getitem__(self, idx):
         img_path = self.data[idx]
-        label = self.labels[idx]
         img = cv2.imread(os.path.join(self.img_dir,*img_path.split("/")))
         img_tensor = torch.from_numpy(img)
         img_tensor = img_tensor.permute(2, 0, 1)
@@ -99,8 +99,9 @@ class DeepFashionDataset(Dataset):
             image = self.transform(img_tensor)
         else :
             image = img_tensor
-        return image, label
+        return image, self.class_to_label[self.classes[idx]]
 
+    
 
 class TripletDeepFashion(Dataset):
     """
@@ -173,21 +174,6 @@ class TripletDeepFashion(Dataset):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import numpy as np
 from PIL import Image
 
@@ -201,12 +187,6 @@ import glob
 import os 
 import csv
 import cv2
-
-
-
-
-
-
 
 
 #######################################################
