@@ -1,3 +1,193 @@
+import torch
+from torch import nn
+from torch.utils.data import Dataset
+from torchvision import transforms
+import pandas as pd
+import cv2
+import numpy as np
+import os
+
+class DeepFashionDataset(Dataset):
+    def __init__(self,img_dir,train_path=None,test_path=None,validation_path=None,mode="train", transform=None, ):
+        
+        self.transform= transform
+        self.img_dir = img_dir
+
+        if mode=="train":
+            assert(train_path is not None)
+            self.file_list = train_path
+        elif mode=="test":
+            assert(test_path is not None)
+            self.file_list = test_path
+        elif mode=="validation":
+            assert(validation_path is not None)
+            self.file_list = validation_path
+        else:
+            return
+        
+        df = pd.read_csv(self.file_list, header=0)
+        
+        self.data = df["file"].to_numpy().tolist()
+        self.main_classes = df["main_category"].to_numpy().tolist() # class id of each sample
+        self.sub_classes = df["sub_category"].to_numpy().tolist()
+        self.clothes_types = df["clothes_type"].to_numpy().tolist()
+        self.source_types = df["source_type"].to_numpy().tolist()
+        self.variation_types=df["variation_type"].to_numpy().tolist()
+        self.bboxes = df["bbox"].to_numpy().tolist()        
+        self.landmarks = df["landmarks"].to_numpy().tolist()
+        self.attributes = df["attributes"].to_numpy().tolist()
+        self.classes = [i+"/"+j for i,j in zip(self.main_classes,self.sub_classes)  ]
+        self.classes_set = set(self.classes)
+        
+        del df
+
+        #
+        # ["file","main_category","sub_category","clothes_type","source_type","variation_type","bbox","landmarks","attributes"]
+        # with open(self.file_list,"r") as file : 
+        #     lines = file.readlines()
+        #     for line in lines[1:]:
+        #         splitted_data = line.split(",")
+        #         self.data.append(splitted_data[0])
+        #         self.main_labels.append(splitted_data[1])
+        #         self.sub_labels.append(splitted_data[2])
+        #         self.clothes_types.append(splitted_data[3])
+        #         self.source_types.append(splitted_data[4])
+        #         self.variation_types.append(splitted_data[5])
+        #         self.bboxes.append(eval(splitted_data[6]))
+        #         self.landmarks.append(eval(splitted_data[7]))
+        #         self.attributes.append(eval(splitted_data[8]))
+
+
+        # for class_path in self.file_list:
+        #     class_name = class_path.split("/")[-1]
+        #     self.classes.append(class_name)
+        #     for img_path in glob.glob(class_path + "/*.jpg"):
+        #         self.data.append([img_path, class_name])
+                
+ 
+        self.labels= [i for i,j in enumerate(self.classes)]
+        self.labels= np.array(self.labels)
+        self.labels_set = set(self.labels)
+                                
+        self.idx_to_class = {i:j for i, j in enumerate(self.classes)} # given id, get class name
+        self.class_to_indices = {cls: np.squeeze(np.where(np.array(self.classes) == cls)).tolist() 
+                                 for cls in self.classes_set} # given class name, get list of item indices
+        self.label_to_indices = {label: np.squeeze(np.where(self.labels == label))
+                                 for label in self.labels_set} # given class name, get list of item indices  
+        
+       
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        img_path = self.data[idx]
+        label = self.labels[idx]
+        img = cv2.imread(os.path.join(self.img_dir,*img_path.split("/")))
+        img_tensor = torch.from_numpy(img)
+        img_tensor = img_tensor.permute(2, 0, 1)
+        
+        c, w, h = img_tensor.shape
+        if w< 300:
+            transform = transforms.Pad((0, 0, 0, 300-w)) # top, left, bottom, right
+            img_tensor = transform(img_tensor)
+        elif h<300:
+            transform = transforms.Pad((0, 0, 300-h, 0)) 
+            img_tensor = transform(img_tensor)
+            
+
+        if self.transform is not None:
+            image = self.transform(img_tensor)
+        else :
+            image = img_tensor
+        return image, label
+
+
+class TripletDeepFashion(Dataset):
+    """
+    Train: For each sample (anchor) randomly chooses a positive and negative samples
+    Test: Creates fixed triplets for testing
+    """
+
+    def __init__(self, inner_dataset, mode="train"):
+        self.inner_dataset = inner_dataset
+        self.mode= mode
+        
+        self.data = self.inner_dataset.data
+        self.classes= self.inner_dataset.classes
+        self.labels= self.inner_dataset.labels
+        self.labels_set= self.inner_dataset.labels_set
+        
+        self.class_to_indices= self.inner_dataset.class_to_indices # given class name, get list of item indices
+        self.label_to_indices = self.inner_dataset.label_to_indices # given label, get list of item indices
+        
+        
+        if mode != "train":
+            # generate fixed triplets for testing
+
+            random_state = np.random.RandomState(29)
+
+            triplets = [[i,
+                         random_state.choice(self.label_to_indices[self.labels[i].item()]),
+                         random_state.choice(self.label_to_indices[
+                                                 np.random.choice(
+                                                     list(self.labels_set - set([self.labels[i].item()]))
+                                                 )
+                                             ])
+                         ]
+                        for i in range(len(self.data))]
+            self.triplets = triplets
+
+    def __getitem__(self, index):
+        if self.mode == "train":
+            #img1, label1 = self.data[index], self.labels[index].item()
+            img1, label1 = self.inner_dataset.__getitem__(index)
+            
+            positive_index = index
+            while positive_index == index:
+                positive_index = np.random.choice(self.label_to_indices[label1])
+            
+            negative_label = np.random.choice(list(self.labels_set - set([label1])))
+            negative_index = np.random.choice(self.label_to_indices[negative_label])
+
+            img2, label2= self.inner_dataset.__getitem__(positive_index)
+            img3, label3= self.inner_dataset.__getitem__(negative_index)
+
+            return (img1, img2, img3), [label1, label2, label3]
+        else:
+            img1, label1= self.inner_dataset.__getitem__(self.triplets[index][0])
+            img2, label2 = self.inner_dataset.__getitem__(self.triplets[index][1])
+            img3, label3= self.inner_dataset.__getitem__(self.triplets[index][2])
+
+            return (img1, img2, img3), [label1, label2, label3]
+
+    def __len__(self):
+        return len(self.inner_dataset)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import numpy as np
 from PIL import Image
 
@@ -11,6 +201,13 @@ import glob
 import os 
 import csv
 import cv2
+
+
+
+
+
+
+
 
 #######################################################
 #               Define Dataset Class
